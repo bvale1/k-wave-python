@@ -446,7 +446,7 @@ def enforce_filename_standards(filepath):
 
 def save_file(filepath, integer_variables, float_variables, hdf_compression_level):
     filepath, filename_ext = enforce_filename_standards(filepath)
-
+    
     # save file
     if filename_ext == '.h5':
         save_h5_file(filepath, integer_variables, float_variables, hdf_compression_level)

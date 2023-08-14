@@ -18,7 +18,9 @@ class Executor:
         self._make_binary_executable()
 
     def _make_binary_executable(self):
-        self.execution_options.binary_path.chmod(self.execution_options.binary_path.stat().st_mode | stat.S_IEXEC)
+        self.execution_options.binary_path.chmod(
+            self.execution_options.binary_path.stat().st_mode | stat.S_IEXEC
+        )
 
     def run_simulation(self, input_filename: str, output_filename: str, options: str):
 
@@ -27,6 +29,8 @@ class Executor:
                   f'-i {input_filename} ' \
                   f'-o {output_filename} ' \
                   f'{options}'
+        print('Running k-wave CUDA binary with commands...')
+        print(command)
         return_code = os.system(command)
 
         try:

@@ -2,11 +2,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import kwave.data
-from kwave import kWaveGrid, SimulationOptions, kWaveMedium
+from kwave.kgrid import kWaveGrid
+from kwave.kmedium import kWaveMedium
 from kwave.ksensor import kSensor
 from kwave.ksource import kSource
 from kwave.kspaceFirstOrder3D import kspaceFirstOrder3DC
 from kwave.options.simulation_execution_options import SimulationExecutionOptions
+from kwave.options.simulation_options import SimulationOptions
 from kwave.utils.kwave_array import kWaveArray
 from kwave.utils.plot import voxel_plot
 from kwave.utils.signals import tone_burst
@@ -81,8 +83,14 @@ simulation_options = SimulationOptions(
 
 execution_options = SimulationExecutionOptions(is_gpu_simulation=True)
 
-sensor_data = kspaceFirstOrder3DC(kgrid=kgrid, medium=medium, source=source, sensor=sensor,
-                                  simulation_options=simulation_options, execution_options=execution_options)
+sensor_data = kspaceFirstOrder3DC(
+    kgrid=kgrid,
+    medium=medium,
+    source=source,
+    sensor=sensor,
+    simulation_options=simulation_options,
+    execution_options=execution_options
+)
 
 p_max = np.reshape(sensor_data['p_max'], (Nx, Nz), order='F')
 
@@ -94,4 +102,5 @@ plt.xlabel('z-position [mm]')
 plt.ylabel('x-position [mm]')
 plt.title('Pressure Field')
 plt.colorbar(label='[MPa]')
+plt.savefig('example_at_linear_array_transducer.png')
 plt.show()
