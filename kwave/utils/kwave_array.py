@@ -626,25 +626,30 @@ class kWaveArray(object):
 
         return distributed_source_signal
 
-    def combine_sensor_data(self, kgrid, sensor_data):
+    def combine_sensor_data(self, kgrid, sensor_data, mask=None):
         self.check_for_elements()
 
-        mask = self.get_array_binary_mask(kgrid)
+        if mask is None:
+            mask = self.get_array_binary_mask(kgrid)
+        else:
+            assert isinstance(mask, np.ndarray) and mask.dtype == bool, "'sensor_mask' must be a boolean numpy array"
+            assert mask.shape == (kgrid.Nx, kgrid.Ny, kgrid.Nz), "'sensor_mask' must be the same size as kgrid"
+            
         mask_ind = matlab_find(mask).squeeze(axis=-1)
 
         Nt = np.shape(sensor_data)[1]
 
-        combined_sensor_data = np.zeros((self.number_elements, Nt))
+        combined_sensor_data = np.zeros((self.number_elements, Nt), dtype=np.float32)
 
         for element_num in range(self.number_elements):
             source_weights = self.get_element_grid_weights(kgrid, element_num)
 
             element_mask_ind = matlab_find(np.array(source_weights), val=0, mode='neq').squeeze(axis=-1)
-
             local_ind = np.isin(mask_ind, element_mask_ind)
-
-            combined_sensor_data[element_num, :] = np.sum(sensor_data[local_ind] * matlab_mask(source_weights, element_mask_ind - 1),
-                                                          axis=0)
+            combined_sensor_data[element_num, :] = np.sum(
+                sensor_data[local_ind] * matlab_mask(source_weights, element_mask_ind - 1), 
+                axis=0
+            )
 
             m_grid = self.elements[element_num].measure / (kgrid.dx) ** (self.elements[element_num].dim)
 

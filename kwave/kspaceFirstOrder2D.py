@@ -18,7 +18,7 @@ from kwave.utils.pml import get_pml
 from kwave.utils.tictoc import TicToc
 
 
-def kspace_first_order_2d_gpu(
+def kspaceFirstOrder2DG(
         kgrid: kWaveGrid,
         source: kSource,
         sensor: NotATransducer,
@@ -26,7 +26,7 @@ def kspace_first_order_2d_gpu(
         simulation_options: SimulationOptions,
         execution_options: SimulationExecutionOptions) -> np.ndarray:
     """
-    2D ime-domain simulation of wave propagation on a GPU using C++ CUDA code.
+    2D time-domain simulation of wave propagation on a GPU using C++ CUDA code.
 
     kspaceFirstOrder2DG provides a blind interface to the C++/CUDA
     version of kspaceFirstOrder2D (called kspaceFirstOrder-CUDA) in the
