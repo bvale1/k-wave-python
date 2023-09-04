@@ -642,6 +642,7 @@ class kWaveArray(object):
         combined_sensor_data = np.zeros((self.number_elements, Nt), dtype=np.float32)
 
         for element_num in range(self.number_elements):
+            print(f'element {element_num + 1} of {self.number_elements}')
             source_weights = self.get_element_grid_weights(kgrid, element_num)
 
             element_mask_ind = matlab_find(np.array(source_weights), val=0, mode='neq').squeeze(axis=-1)

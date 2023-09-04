@@ -11,7 +11,7 @@ VERSION = '0.2.1'
 # is refactored
 
 platform = sys.platform
-
+'''
 if platform.startswith('linux'):
     system = 'linux'
 elif platform.startswith(('win', 'cygwin')):
@@ -124,3 +124,4 @@ def install_binaries():
 
 if not binaries_present():
     install_binaries()
+'''
