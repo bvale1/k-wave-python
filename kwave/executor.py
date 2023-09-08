@@ -14,8 +14,10 @@ class Executor:
 
         self.execution_options = execution_options
         self.simulation_options = simulation_options
-
-        self._make_binary_executable()
+        
+        # Containers on the AIsurrey cluster don't have the correct permissions
+        # use chmod -R 777 path_to_executible in Dockerfile instead
+        #self._make_binary_executable()
 
     def _make_binary_executable(self):
         self.execution_options.binary_path.chmod(
