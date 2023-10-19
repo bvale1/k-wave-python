@@ -1,5 +1,6 @@
 from typing import Tuple, Union, Optional, List
 
+import torch
 import numpy as np
 
 
@@ -31,6 +32,14 @@ def rem(x, y, rtol=1e-05, atol=1e-08):
     remainder = x - np.fix(quotient) * y
 
     return remainder
+
+def matlab_assign_pytorch(matrix: torch.Tensor, indices: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+    # the array is flattened in row-major order instead of column-major order
+    original_shape = matrix.shape
+    matrix = matrix.flatten()
+    matrix[indices] = values
+    return matrix.reshape(original_shape)
+        
 
 def matlab_assign(matrix: np.ndarray, indices: Union[int, np.ndarray],
                   values: Union[int, float, np.ndarray]) -> np.ndarray:
@@ -73,6 +82,22 @@ def matlab_find(arr: Union[List[int], np.ndarray], val: int = 0, mode: str = 'ne
     else:  # 'eq'
         arr = np.where(arr.flatten(order='F') == val)[0] + 1  # +1 due to matlab indexing
     return np.expand_dims(arr, -1)  # compatibility, n => [n, 1]
+
+
+def matlab_find_pytorch(arr: torch.Tensor, val: int = 0, mode: str = 'neq') -> torch.Tensor:
+    # the array is flattened in row-major order instead of column-major order
+    if mode == 'neq':
+        arr = torch.where(torch.flatten(arr) != val)[0] + 1
+    else:  # 'eq'
+        arr = torch.where(torch.flatten(arr) == val)[0] + 1
+    return arr
+
+def matlab_mask_pytorch(arr: torch.Tensor, mask: torch.Tensor, diff: Optional[int] = None) -> torch.Tensor:
+    # the array is flattened in row-major order instead of column-major order
+    if diff is None:
+        return torch.unsqueeze(arr.flatten()[mask.flatten()], dim=-1)
+    else:
+        return torch.unsqueeze(arr.flatten()[mask.flatten() + diff], dim=-1)
 
 
 def matlab_mask(arr: np.ndarray, mask: np.ndarray, diff: Optional[int] = None) -> np.ndarray:

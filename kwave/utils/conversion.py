@@ -4,8 +4,10 @@ from typing import Tuple, Union, Any
 import numpy as np
 from numpy import ndarray
 
-from kwave.kgrid import kWaveGrid
-from kwave.utils.matlab import matlab_mask
+import torch
+
+from kwave.kgrid import kWaveGrid, kWaveGrid_pytorch
+from kwave.utils.matlab import matlab_mask, matlab_mask_pytorch
 from kwave.utils.matrix import sort_rows
 
 
@@ -361,9 +363,113 @@ def hounsfield2density(ct_data: np.ndarray, plot_fitting: bool = False) -> np.nd
     return density
 
 
+def tol_star_pytorch(tolerance : torch.Tensor,
+                     kgrid : kWaveGrid_pytorch,
+                     point : torch.Tensor,
+                     device : torch.device,
+                     debug : bool) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    # implementation of tol_star in PyTorch without using global variables
+    ongrid_threshold = kgrid.dx * torch.tensor(1e-3, dtype=torch.float32, device=device)
+    if debug: 
+        print(f'tol_star_pytorch debug: ongrid_threshold={ongrid_threshold} m')
+    
+    # This block of code is normally only executed the first time tol_star is called
+    # global variables tol and subs0 are used to store the results of the first call
+    #===============================================================================
+    decay_subs = torch.ceil(1 / (np.pi * tolerance))
+    print(f'decay_subs.shape {decay_subs.shape}')
+
+    lin_ind = torch.arange(
+        -decay_subs, decay_subs + 1, dtype=torch.float32, device=device, requires_grad=False
+    )
+    print(f'lin_ind.shape {lin_ind.shape}')
+
+    if kgrid.dim == 1:
+        is0 = lin_ind
+    elif kgrid.dim == 2:
+        is0, js0 = torch.meshgrid(lin_ind, lin_ind, device=device)
+    elif kgrid.dim == 3:
+        is0, js0, ks0 = torch.meshgrid(lin_ind, lin_ind, lin_ind, indexing='ij', device=device)
+        print(f'is0.shape {is0.shape}')
+
+    if kgrid.dim == 1:
+        subs0 = [is0]
+    elif kgrid.dim == 2:
+        instar = np.abs(is0 * js0) <= decay_subs
+        is0 = is0[instar]
+        js0 = js0[instar]
+        subs0 = [is0, js0]
+    elif kgrid.dim == 3:
+        instar = np.abs(is0 * js0 * ks0) <= decay_subs
+        print(f'instar.shape {instar.shape}')
+        # the transpose might not be necessary
+        is0 = matlab_mask_pytorch(is0, instar).T
+        print(f'is0.shape {is0.shape}')
+        js0 = matlab_mask_pytorch(js0, instar).T
+        ks0 = matlab_mask_pytorch(ks0, instar).T
+        subs0 = [is0, js0, ks0]
+    #===============================================================================
+    
+    is_ = subs0[0].copy()
+    print(f'is_.shape {is_.shape}')
+    js = subs0[1].copy() if kgrid.dim > 1 else []
+    ks = subs0[2].copy() if kgrid.dim > 2 else []
+    
+    x_closest, x_closest_ind = find_closest_pytorch(kgrid.x_vec, point[0])
+    
+    if torch.abs(x_closest - point[0]) < ongrid_threshold:
+        if kgrid.dim > 1:
+            js = js[is_ == 0]
+            if kgrid.dim > 2:
+                ks = ks[is_ == 0]
+        is_ = is_[is_ == 0]
+    
+    if kgrid.dim > 1:
+        y_closest, y_closest_ind = find_closest_pytorch(kgrid.y_vec, point[1])
+        if torch.abs(y_closest - point[1]) < ongrid_threshold:
+            is_ = is_[js == 0]
+            if kgrid.dim > 2:
+                ks = ks[js == 0]
+            js = js[js == 0]
+            
+    if kgrid.dim > 2:
+        z_closest, z_closest_ind = find_closest_pytorch(kgrid.z_vec, point[2])
+        if torch.abs(z_closest - point[2]) < ongrid_threshold:
+            is_ = is_[ks == 0]
+            js = js[ks == 0]
+            ks = ks[ks == 0]
+            
+    is_ += x_closest_ind + 1
+    if kgrid.dim > 1:
+        js += y_closest_ind + 1
+    if kgrid.dim > 2:
+        ks += z_closest_ind + 1
+    
+    if kgrid.dim == 1:
+        inbounds = (1 <= is_) & (is_ <= kgrid.Nx)
+        is_ = is_[inbounds]
+    elif kgrid.dim == 2:
+        inbounds = (1 <= is_) & (is_ <= kgrid.Nx) & (1 <= js) & (js <= kgrid.Ny)
+        is_ = is_[inbounds]
+        js = js[inbounds]
+    if kgrid.dim == 3:
+        inbounds = (1 <= is_) & (is_ <= kgrid.Nx) & (1 <= js) & (js <= kgrid.Ny) & (1 <= ks) & (ks <= kgrid.Nz)
+        is_ = is_[inbounds]
+        js = js[inbounds]
+        ks = ks[inbounds]
+    
+    if kgrid.dim == 1:
+        lin_ind = is_
+    elif kgrid.dim == 2:
+        lin_ind = kgrid.Nx * (js - 1) + is_
+    elif kgrid.dim == 3:
+        lin_ind = kgrid.Nx * kgrid.Ny * (ks - 1) + kgrid.Nx * (js - 1) + is_
+
+    return lin_ind, is_ - 1, js - 1, ks - 1  # -1 for mapping from Matlab indexing to Python indexing
+
+
 tol = None
 subs0 = None
-
 
 def tol_star(tolerance, kgrid, point, debug):
     global tol, subs0
@@ -459,4 +565,8 @@ def tol_star(tolerance, kgrid, point, debug):
 def find_closest(array, value):
     array = np.asarray(array)
     idx = (np.abs(array - value)).argmin()
+    return array[idx], idx
+
+def find_closest_pytorch(array : torch.Tensor, value : torch.Tensor):
+    idx = torch.argmin(torch.abs(array - value))
     return array[idx], idx

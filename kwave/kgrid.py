@@ -3,6 +3,7 @@ import sys
 from dataclasses import dataclass
 
 import numpy as np
+import torch
 
 from kwave.data import Vector, FlexibleVector
 from kwave.enums import DiscreteCosine, DiscreteSine
@@ -697,3 +698,24 @@ class kWaveGrid(object):
             # define product of implied period
             M = Mx * My * Mz
             return k, M
+
+
+@dataclass
+class kWaveGrid_pytorch():
+    # This is not a fully functional pytorch port of the KWaveGrid class
+    # it is designed cast the kWaveGrid class to pytorch tensors
+    # for use in _pytorch functions
+    # it should not be used with non pytorch functions
+    def __init__(self, kgrid, device):
+        print('type(kgrid.x_vec)', type(kgrid.x_vec))
+        self.dim = torch.tensor(kgrid.dim, device=device, requires_grad=False)
+        self.dx = torch.tensor(kgrid.dx, device=device, requires_grad=False)
+        self.dy = torch.tensor(kgrid.dy, device=device, requires_grad=False)
+        self.dz = torch.tensor(kgrid.dz, device=device, requires_grad=False)
+        self.nonuniform = kgrid.nonuniform # not needed for GPU operations
+        self.x_vec = torch.tensor(kgrid.x_vec, device=device, requires_grad=False)
+        if kgrid.dim > 1:
+            self.y_vec = torch.tensor(kgrid.y_vec, device=device, requires_grad=False)
+        if kgrid.dim > 2:
+            self.z_vec = torch.tensor(kgrid.z_vec, device=device, requires_grad=False)
+        

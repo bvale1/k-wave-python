@@ -7,14 +7,17 @@ import numpy as np
 from numpy import arcsin, pi, cos, size, array
 from numpy.linalg import linalg
 
+import torch
+
 import kwave
-from kwave.kgrid import kWaveGrid
-from kwave.utils.conversion import tol_star
+from kwave.kgrid import kWaveGrid, kWaveGrid_pytorch
+from kwave.utils.conversion import tol_star, tol_star_pytorch
 from kwave.utils.interp import get_delta_bli
-from kwave.utils.mapgen import trim_cart_points, make_cart_rect, make_cart_arc, make_cart_bowl, make_cart_disc, \
-    make_cart_spherical_segment
+from kwave.utils.mapgen import trim_cart_points, make_cart_rect, make_cart_arc, \
+    make_cart_bowl, make_cart_disc, make_cart_spherical_segment
 from kwave.utils.math import sinc, get_affine_matrix
-from kwave.utils.matlab import matlab_assign, matlab_mask, matlab_find
+from kwave.utils.matlab import matlab_assign, matlab_assign_pytorch, matlab_mask, \
+    matlab_mask_pytorch, matlab_find, matlab_find_pytorch
 
 
 @dataclass
@@ -398,6 +401,9 @@ class kWaveArray(object):
             measure=line_length
         ))
 
+    def get_element_grid_weights_pytorch(self, kgrid, element_num, device):
+        return self.get_off_grid_points_pytorch(kgrid, element_num, False, device)
+
     def get_element_grid_weights(self, kgrid, element_num):
         return self.get_off_grid_points(kgrid, element_num, False)
 
@@ -442,6 +448,66 @@ class kWaveArray(object):
         vec = np.append(vec, [1])
         vec = np.matmul(self.array_transformation, vec)
         return vec[:-1]
+
+    def get_off_grid_points_pytorch(self, kgrid, element_num, mask_only, device):
+        # currently only supports CUSTOM elements
+        # check the array has elements
+        self.check_for_elements()
+        
+        assert self.elements[element_num].type == 'custom', 'Only CUSTOM elements are supported'
+        
+        # check inputs
+        assert isinstance(kgrid, kWaveGrid_pytorch), 'kgrid must be a kWaveGrid_pytorch object'
+        assert 0 <= element_num <= self.number_elements - 1
+        
+        # compute measure (length/area/volume) in grid squares (assuming dx = dy = dz)
+        m_grid = self.elements[element_num].measure / (kgrid.dx) ** (self.elements[element_num].dim)
+        
+        # get number of integration points
+        if self.elements[element_num].type == 'custom':
+            # assign number of integration points directly
+            m_integration = self.elements[element_num].integration_points.shape[1]
+        else:
+            # compute the number of integration points using the upsampling rate
+            m_integration = ceil(m_grid * self.upsampling_rate)
+            
+        # TODO: compute integration points covering NON CUSTOM elements
+        if self.elements[element_num].type == 'custom':
+            # directly assign integration points
+            integration_points = torch.tensor(
+                self.elements[element_num].integration_points, dtype=torch.float32, device=device
+            )
+        else:
+            raise ValueError(f'{self.elements[element_num].type} is not a valid array element type.')
+
+        # recompute actual number of points
+        m_integration = integration_points.shape[1]
+
+        # compute scaling factor
+        scale = m_grid / m_integration
+        
+        if self.axisymmetric:
+            raise NotImplementedError('Axisymmetric arrays are not supported')
+        else:
+            # remove integration points which are outside grid
+            integration_points = trim_cart_points(kgrid, integration_points)
+
+            # calculate grid weights from BLIs centered on the integration points
+            grid_weights = off_grid_points_pytorch(
+                kgrid, 
+                integration_points, 
+                torch.tensor(scale, dtype=torch.float32, device=device),
+                torch.tensor(self.bli_tolerance, dtype=torch.float32, device=device),
+                torch.tensor(mask_only, dtype=torch.bool, device=device),
+                torch.tensor(self.single_precision, dtype=torch.bool, device=device),
+                device,
+                bli_type=self.bli_type,
+                debug=True,
+                display_wait_bar=True
+            )
+            
+        return grid_weights
+            
 
     def get_off_grid_points(self, kgrid, element_num, mask_only):
 
@@ -626,6 +692,81 @@ class kWaveArray(object):
 
         return distributed_source_signal
 
+    def combine_sensor_data_pytorch(self, kgrid, sensor_data, mask=None, device=torch.device('cpu')):
+        import timeit
+        start = timeit.default_timer()
+        self.check_for_elements()
+        print(f'self.check_for_elements(): {timeit.default_timer() - start:.2f} s')
+        
+        if mask is None:
+            start = timeit.default_timer()
+            mask = self.get_array_binary_mask(kgrid)
+            print(f'self.get_array_binary_mask(kgrid): {timeit.default_timer() - start:.2f} s')
+        else:
+            assert isinstance(mask, np.ndarray) and mask.dtype == bool, "'sensor_mask' must be a boolean numpy array"
+            assert mask.shape == (kgrid.Nx, kgrid.Ny, kgrid.Nz), "'sensor_mask' must be the same size as kgrid"
+        
+        if isinstance(kgrid, kWaveGrid):
+            print('converting kgrid to kWaveGrid_pytorch')
+            kgrid = kWaveGrid_pytorch(kgrid)
+        elif not isinstance(kgrid, kWaveGrid_pytorch):
+            raise ValueError('kgrid must be a kWaveGrid or kWaveGrid_pytorch object')
+        if isinstance(sensor_data, np.ndarray):
+            sensor_data = torch.tensor(sensor_data, dtype=torch.float32, requires_grad=False, device=device)
+        if isinstance(mask, np.ndarray):
+            mask = torch.tensor(mask, dtype=torch.bool, requires_grad=False, device=device)
+        
+        start = timeit.default_timer()
+        mask_ind = matlab_find_pytorch(mask)
+        print('mask_ind.shape')
+        print(mask_ind.shape)
+        print(f'matlab_find_pytorch(mask): {timeit.default_timer() - start:.2f} s')
+        
+        Nt = sensor_data.shape[1]
+        
+        combined_sensor_data = torch.zeros(
+            (self.number_elements, Nt), dtype=torch.float32, requires_grad=False, device=device
+        )
+        
+        # TODO: port get_element_grid_weights to pytorch
+        # will need to cast some of the kgrid attributes to pytorch to achieve this
+        for element_num in range(self.number_elements):
+            print(f'element {element_num + 1} of {self.number_elements}')
+            start = timeit.default_timer()
+            source_weights = self.get_element_grid_weights_pytorch(kgrid, element_num)
+            print(f'self.get_element_grid_weights_pytorch(kgrid, element_num): {timeit.default_timer() - start:.2f} s')
+            
+            print('source_weights.shape')
+            print(source_weights.shape)
+            start = timeit.default_timer()
+            element_mask_ind = matlab_find_pytorch(source_weights, val=0, mode='neq').squeeze(axis=-1)
+            print(f'element_mask_ind = matlab_find_pytorch(source_weights, val=0, mode=\'neq\').squeeze(axis=-1): {timeit.default_timer() - start:.2f} s')
+
+            start = timeit.default_timer()
+            local_ind = torch.isin(mask_ind, element_mask_ind)
+            print('local_ind.shape')
+            print(local_ind.shape)
+            print(f'local_ind = torch.isin(mask_ind, element_mask_ind): {timeit.default_timer() - start:.2f} s')
+
+            start = timeit.default_timer()
+            combined_sensor_data[element_num, :] = torch.sum(
+                sensor_data[local_ind] * matlab_mask_pytorch(source_weights, element_mask_ind - 1), 
+                dim=0
+            )
+            print('combined_sensor_data.shape')
+            print(combined_sensor_data.shape)
+            print(f'combined_sensor_data[element_num, :] = torch.sum(sensor_data[local_ind] * matlab_mask_pytorch(source_weights, element_mask_ind - 1), dim=0): {timeit.default_timer() - start:.2f} s')
+            
+            m_grid = self.elements[element_num].measure / (kgrid.dx) ** (self.elements[element_num].dim)
+            
+            start = timeit.default_timer()
+            combined_sensor_data[element_num, :] = combined_sensor_data[element_num, :] / m_grid
+            print('combined_sensor_data.shape')
+            print(combined_sensor_data.shape)
+            print(f'combined_sensor_data[element_num, :] = combined_sensor_data[element_num, :] / m_grid: {timeit.default_timer() - start:.2f} s')          
+
+        return combined_sensor_data
+
     def combine_sensor_data(self, kgrid, sensor_data, mask=None):
         self.check_for_elements()
 
@@ -635,24 +776,37 @@ class kWaveArray(object):
             assert isinstance(mask, np.ndarray) and mask.dtype == bool, "'sensor_mask' must be a boolean numpy array"
             assert mask.shape == (kgrid.Nx, kgrid.Ny, kgrid.Nz), "'sensor_mask' must be the same size as kgrid"
             
+        print(f'mask.shape {mask.shape}')
+        
         mask_ind = matlab_find(mask).squeeze(axis=-1)
-
+        print(f'mask_ind.shape {mask_ind.shape}')
+    
         Nt = np.shape(sensor_data)[1]
+        print(f'Nt {Nt}')
 
         combined_sensor_data = np.zeros((self.number_elements, Nt), dtype=np.float32)
+        print(f'combined_sensor_data.shape {combined_sensor_data.shape}')
 
         for element_num in range(self.number_elements):
             print(f'element {element_num + 1} of {self.number_elements}')
+            
             source_weights = self.get_element_grid_weights(kgrid, element_num)
+            print(f'source_weights.shape {source_weights.shape}')
 
             element_mask_ind = matlab_find(np.array(source_weights), val=0, mode='neq').squeeze(axis=-1)
+            print(f'element_mask_ind.shape {element_mask_ind.shape}')
+            
             local_ind = np.isin(mask_ind, element_mask_ind)
+            print(f'local_ind.shape {local_ind.shape}')
+            
             combined_sensor_data[element_num, :] = np.sum(
                 sensor_data[local_ind] * matlab_mask(source_weights, element_mask_ind - 1), 
                 axis=0
             )
-
+            print(f'combined_sensor_data[element_num, :].shape {combined_sensor_data[element_num, :].shape}')
+        
             m_grid = self.elements[element_num].measure / (kgrid.dx) ** (self.elements[element_num].dim)
+            print(f'm_grid {m_grid}')
 
             combined_sensor_data[element_num, :] = combined_sensor_data[element_num, :] / m_grid
 
@@ -689,7 +843,185 @@ class kWaveArray(object):
         return element_pos
 
 
-def off_grid_points(kgrid, points,
+def off_grid_points_pytorch(kgrid, 
+                            points,
+                            scale,
+                            bli_tolerance,
+                            mask_only,
+                            single_precision,
+                            device,
+                            bli_type='sinc',
+                            debug=False,
+                            display_wait_bar=False):
+    
+    assert isinstance(kgrid, kWaveGrid_pytorch), "'kgrid' must be a kWaveGrid_pytorch object"
+    
+    if bli_type != 'sinc':
+        raise NotImplementedError('Only sinc BLIs are supported at this time')
+    assert isinstance(kgrid, kWaveGrid_pytorch), "'kgrid' must be a kWaveGrid_pytorch object"
+    assert isinstance(points, torch.Tensor), "'points' must be a torch tensor"
+
+    wait_bar_update_freq = 100
+
+    # check dimensions of points input
+    if points.shape[0] != kgrid.dim:
+        raise ValueError("Input points must be given as matrix with dimensions num_dims x num_points.")
+
+    # get the number of off-grid points
+    num_points = points.shape[1]
+
+    # expand scale value if scalar
+    if len(scale.shape) == 0:
+        scale = scale * torch.ones(num_points, device=device, dtype=torch.float32)
+    elif scale.shape != num_points:
+        raise ValueError("Input scale must be scalar or the same length as points.")
+    if not isinstance(debug, bool):
+        raise ValueError("Optional input 'Debug' must be Boolean.")
+
+    if not (isinstance(bli_tolerance, torch.Tensor) or 0. < bli_tolerance < 1.):
+        raise ValueError("bli_tolerance should be a real scalar tensor between 0 and 1.")
+    if bli_type not in ['sinc', 'exact']:
+        raise ValueError("Optional input 'bli_type' must be either 'sinc' or 'exact'.")
+    if not isinstance(mask_only, torch.Tensor):
+        raise ValueError("Optional input 'mask_only' must be Boolean.")
+    if not isinstance(single_precision, torch.Tensor):
+        raise ValueError("Optional input 'single_precision' must be Boolean.")
+    if not isinstance(display_wait_bar, bool):
+        raise ValueError("Optional input 'display_wait_bar' must be Boolean.")
+    
+    # preallocate some variables for speed
+    if bli_tolerance == 0.:
+        pi_on_dx = torch.pi / kgrid.dx
+        pi_on_dy = torch.pi / kgrid.dy
+        pi_on_dz = torch.pi / kgrid.dz
+    else:
+        scaler_dxyz = torch.tensor(True, dtype=torch.bool, device=device)
+        pi_on_dxyz = torch.pi / kgrid.dx
+        if kgrid.dim == 2:
+            if kgrid.dx != kgrid.dy:
+                scaler_dxyz = torch.tensor(False, dtype=torch.bool, device=device)
+                pi_on_dxyz = torch.pi / torch.tensor([kgrid.dx, kgrid.dy], dtype=torch.float32, device=device)
+        elif kgrid.dim == 3:
+            if not (kgrid.dx == kgrid.dy and kgrid.dx == kgrid.dz):
+                scaler_dxyz = torch.tensor(False, dtype=torch.bool, device=device)
+                pi_on_dxyz = torch.pi / torch.tensor([kgrid.dx, kgrid.dy, kgrid.dz], dtype=torch.float32, device=device)
+                
+    # initialise the source mask
+    if mask_only:
+        mask_type = torch.bool
+    elif single_precision:
+        mask_type = torch.float32
+    else:
+        mask_type = torch.float64
+        
+    if kgrid.dim == 1:
+        mask = torch.zeros((kgrid.Nx, 1), dtype=mask_type, device=device)
+    elif kgrid.dim == 2:
+        mask = torch.zeros((kgrid.Nx, kgrid.Ny), dtype=mask_type, device=device)
+    elif kgrid.dim == 3:
+        mask = torch.zeros((kgrid.Nx, kgrid.Ny, kgrid.Nz), dtype=mask_type, device=device)
+    
+    if display_wait_bar:
+        import tqdm
+        tqdm.tqdm(total=100, desc="Computing off-grid source mask...")
+    
+    # add to the overall mask using contributions from each source point
+    for point_ind in range(num_points):
+        print(f'point {point_ind + 1}/{num_points}')
+        # extract a single point
+        point = points[:, point_ind]
+        print('point.shape')
+        print(point.shape)
+        
+        # convert to the computational coordinate if the physical coordinate is
+        # sampled nonuniformly
+        if kgrid.nonuniform:
+            # mapoint doesn't seem to be implemented in k-wave-python yet
+            point, BLIscale = mapPoint(kgrid, point) # noqa: F821
+            
+        if bli_tolerance == 0.:
+            if mask_only:
+                mask = torch.ones(mask.shape, dtype=torch.bool, device=device)
+            else:
+                if kgrid.dim == 1:
+                    if bli_type == 'sinc':
+                        mask = mask + scale[point_ind] * torch.sinc(pi_on_dx * (kgrid.x_vec - point[0]) / torch.pi)
+                    elif bli_type == 'exact':
+                        raise NotImplementedError('Only sinc BLIs are supported at this time')
+                
+                elif kgrid.dim == 2:
+                    if bli_type == 'sinc':
+                        mask_t_x = torch.sinc(pi_on_dx * (kgrid.x_vec - point[0]) / torch.pi)
+                        mask_t_y = torch.sinc(pi_on_dy * (kgrid.y_vec - point[1]) / torch.pi)
+                    elif bli_type == 'exact':
+                        raise NotImplementedError('Only sinc BLIs are supported at this time')
+                    
+                    mask = mask + scale[point_ind] * torch.matmul(mask_t_x, mask_t_y.T)
+                
+                elif kgrid.dim == 3:
+                    if bli_type == 'sinc':
+                        mask_t_x = torch.sinc(pi_on_dx * (kgrid.x_vec - point[0]) / torch.pi)
+                        mask_t_y = torch.sinc(pi_on_dy * (kgrid.y_vec - point[1]) / torch.pi)
+                        mask_t_z = torch.sinc(pi_on_dz * (kgrid.z_vec - point[2]) / torch.pi)
+                    elif bli_type == 'exact':
+                        raise NotImplementedError('Only sinc BLIs are supported at this time')
+                    
+                    print(f'mask_t_x.shape {mask_t_x.shape}')
+                    
+                    mask = mask + scale[point_ind] * torch.reshape(
+                        torch.kron(
+                            torch.matmul(mask_t_x, mask_t_y.T), mask_t_z.T
+                        ), 
+                        [kgrid.Nx, kgrid.Ny, kgrid.Nz]
+                    )
+                    
+        else:
+            # create a mask for the current point
+            if kgrid.dim == 1:
+                ind, is_ = tol_star_pytorch(bli_tolerance, kgrid, point, device=device, debug=debug)
+                xs = kgrid.x_vec[is_]
+                xyz = xs
+            elif kgrid.dim == 2:
+                ind, is_, js_ = tol_star_pytorch(bli_tolerance, kgrid, point, device=device, debug=debug)
+                xs = kgrid.x_vec[is_]
+                ys = kgrid.y_vec[js_]
+                xyz = torch.cat((xs.unsqueeze(-1), ys.unsqueeze(-1)), dim=0)
+            elif kgrid.dim == 3:
+                ind, is_, js_, ks_ = tol_star_pytorch(bli_tolerance, kgrid, point, device=device, debug=debug)
+                xs = kgrid.x_vec[is_]
+                ys = kgrid.y_vec[js_]
+                zs = kgrid.z_vec[ks_]
+                xyz = torch.cat((xs.unsqueeze(-1), ys.unsqueeze(-1), zs.unsqueeze(-1)), dim=0)
+            
+            ind = ind.to(dtype=torch.int32)
+            
+            if mask_only:
+                # add the current point to the mask
+                mask = matlab_assign_pytorch(mask, ind - 1, True)
+            else:
+                # evaluate the BLI at the points in the mask
+                mask_t = torch.sinc(pi_on_dxyz * (xyz - point.T) / torch.pi)
+                mask_t = torch.prod(mask_t, dim=1)
+                
+                # apply scaling for non-uniform grid
+                if kgrid.nonuniform:
+                    mask_t = mask_t * BLIscale
+                    
+                # add this contribution to the overall source mask
+                mask = matlab_assign_pytorch(
+                    mask,
+                    ind - 1,
+                    matlab_mask_pytorch(mask, ind - 1).squeeze(-1) + scale[point_ind] * mask_t
+                )
+                
+        # update wait bar
+        if display_wait_bar and (point_ind % wait_bar_update_freq == 0):
+            tqdm.update(wait_bar_update_freq)
+    return mask
+
+
+def off_grid_points(kgrid, 
+                    points,
                     scale=1,
                     bli_tolerance=0.1,
                     bli_type='sinc',

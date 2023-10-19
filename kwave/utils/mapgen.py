@@ -5,6 +5,7 @@ from typing import Tuple, Optional, Union, List, Any, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 import scipy
 from scipy import optimize
 
@@ -2745,7 +2746,7 @@ def ndgrid(*args):
     return np.array(np.meshgrid(*args, indexing='ij'))
 
 
-def trim_cart_points(kgrid, points: np.ndarray):
+def trim_cart_points(kgrid, points: Union[np.ndarray, torch.Tensor]):
     """
         trim_cart_points filters a dim x num_points array of Cartesian points
         so that only those within the bounds of a given kgrid remain.
