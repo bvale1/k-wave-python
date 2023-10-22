@@ -1,8 +1,8 @@
-import os
+#import os
 import sys
-import urllib.request
-from os import environ
-from pathlib import Path
+#import urllib.request
+#from os import environ
+#from pathlib import Path
 
 
 VERSION = '0.2.1'
