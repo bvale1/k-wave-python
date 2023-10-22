@@ -646,7 +646,8 @@ class kWaveArray(object):
         logger.debug(f'combined_sensor_data: {combined_sensor_data.shape} {combined_sensor_data.dtype}')
             
         if sensor_weights is None:
-            sensor_weights = []; sensor_local_ind = []
+            sensor_weights = []
+            sensor_local_ind = []
         
             mask_ind = matlab_find(mask).squeeze(axis=-1)
             logger.debug(f'mask_ind: {mask_ind.shape} {mask_ind.dtype}')
