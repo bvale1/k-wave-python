@@ -1,4 +1,5 @@
 import time
+import logging
 from dataclasses import dataclass
 from math import ceil
 from typing import Optional
@@ -16,6 +17,7 @@ from kwave.utils.mapgen import trim_cart_points, make_cart_rect, make_cart_arc, 
 from kwave.utils.math import sinc, get_affine_matrix
 from kwave.utils.matlab import matlab_assign, matlab_mask, matlab_find
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Element:
@@ -626,7 +628,7 @@ class kWaveArray(object):
 
         return distributed_source_signal
 
-    def combine_sensor_data(self, kgrid, sensor_data, mask=None):
+    def combine_sensor_data(self, kgrid, sensor_data, mask=None, sensor_weights=None, sensor_local_ind=None):
         self.check_for_elements()
 
         if mask is None:
@@ -634,29 +636,71 @@ class kWaveArray(object):
         else:
             assert isinstance(mask, np.ndarray) and mask.dtype == bool, "'sensor_mask' must be a boolean numpy array"
             assert mask.shape == (kgrid.Nx, kgrid.Ny, kgrid.Nz), "'sensor_mask' must be the same size as kgrid"
-            
-        mask_ind = matlab_find(mask).squeeze(axis=-1)
-
+        
+        logger.debug(f'sensor_data: {sensor_data.shape} {sensor_data.dtype}')
+        
         Nt = np.shape(sensor_data)[1]
-
+        logger.debug(f'Nt: {Nt} {type(Nt)}')
+          
         combined_sensor_data = np.zeros((self.number_elements, Nt), dtype=np.float32)
+        logger.debug(f'combined_sensor_data: {combined_sensor_data.shape} {combined_sensor_data.dtype}')
+            
+        if sensor_weights is None:
+            sensor_weights = []; sensor_local_ind = []
+        
+            mask_ind = matlab_find(mask).squeeze(axis=-1)
+            logger.debug(f'mask_ind: {mask_ind.shape} {mask_ind.dtype}')
 
-        for element_num in range(self.number_elements):
-            print(f'element {element_num + 1} of {self.number_elements}')
-            source_weights = self.get_element_grid_weights(kgrid, element_num)
+            for element_num in range(self.number_elements):
+                logger.debug(f'element {element_num + 1} of {self.number_elements}')
+                
+                source_weights = self.get_element_grid_weights(kgrid, element_num)
+                logger.debug(f'source_weights: {source_weights.shape} {source_weights.dtype}')
 
-            element_mask_ind = matlab_find(np.array(source_weights), val=0, mode='neq').squeeze(axis=-1)
-            local_ind = np.isin(mask_ind, element_mask_ind)
-            combined_sensor_data[element_num, :] = np.sum(
-                sensor_data[local_ind] * matlab_mask(source_weights, element_mask_ind - 1), 
-                axis=0
-            )
+                element_mask_ind = matlab_find(np.array(source_weights), val=0, mode='neq').squeeze(axis=-1)
+                logger.debug(f'element_mask_ind: {element_mask_ind.shape} {element_mask_ind.dtype}')
+                
+                sensor_local_ind.append(np.isin(mask_ind, element_mask_ind))
+                logger.debug(f'local_ind: {sensor_local_ind[-1].shape} {sensor_local_ind[-1].dtype}')
+                
+                sensor_weights.append(matlab_mask(source_weights, element_mask_ind - 1))
+                logger.debug(f'sensor_weights[{element_num}]: {sensor_weights[-1].shape} {sensor_weights[-1].dtype}')
+                
+                combined_sensor_data[element_num, :] = np.sum(
+                    sensor_data[sensor_local_ind[-1]] * sensor_weights[-1], 
+                    axis=0
+                )
+                logger.debug(f'combined_sensor_data[{element_num}]: {combined_sensor_data[element_num, :].shape} {combined_sensor_data[element_num, :].dtype}')
 
-            m_grid = self.elements[element_num].measure / (kgrid.dx) ** (self.elements[element_num].dim)
+                m_grid = self.elements[element_num].measure / (kgrid.dx) ** (self.elements[element_num].dim)
+                logger.debug(f'm_grid: {m_grid} {type(m_grid)}')
 
-            combined_sensor_data[element_num, :] = combined_sensor_data[element_num, :] / m_grid
+                combined_sensor_data[element_num, :] = combined_sensor_data[element_num, :] / m_grid
+        
+        else:
+            assert isinstance(sensor_weights, list) and len(sensor_weights), "'sensor_weights' must be a list of the same length as the number of elements"
+            assert all(isinstance(i, np.ndarray) for i in sensor_weights), "'sensor_weights' must be a list of numpy arrays"
+            assert all(i.dtype == float for i in sensor_weights), "'sensor_weights' must be a list of numpy arrays of type float"
+            
+            assert isinstance(sensor_local_ind, list) and len(sensor_local_ind), "'sensor_local_ind' must be a list of the same length as the number of elements"
+            assert all(isinstance(i, np.ndarray) for i in sensor_local_ind), "'sensor_local_ind' must be a list of numpy arrays"
+            assert all(i.dtype == bool for i in sensor_local_ind), "'sensor_local_ind' must be a list of numpy arrays of type bool"
+        
+            for element_num in range(self.number_elements):
+                logger.debug(f'element {element_num + 1} of {self.number_elements}')
+                
+                combined_sensor_data[element_num, :] = np.sum(
+                    sensor_data[sensor_local_ind[element_num]] * sensor_weights[element_num], 
+                    axis=0
+                )
+                logger.debug(f'combined_sensor_data: {combined_sensor_data.shape} {combined_sensor_data.dtype}')
+                
+                m_grid = self.elements[element_num].measure / (kgrid.dx) ** (self.elements[element_num].dim)
+                logger.debug(f'm_grid: {m_grid} {type(m_grid)}')
 
-        return combined_sensor_data
+                combined_sensor_data[element_num, :] = combined_sensor_data[element_num, :] / m_grid
+ 
+        return (combined_sensor_data, sensor_weights, sensor_local_ind)
 
     def set_array_position(self, translation, rotation):
 
