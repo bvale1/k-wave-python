@@ -681,7 +681,7 @@ class kWaveArray(object):
         else:
             assert isinstance(sensor_weights, list) and len(sensor_weights), "'sensor_weights' must be a list of the same length as the number of elements"
             assert all(isinstance(i, np.ndarray) for i in sensor_weights), "'sensor_weights' must be a list of numpy arrays"
-            assert all(i.dtype == float for i in sensor_weights), "'sensor_weights' must be a list of numpy arrays of type float"
+            assert all(i.dtype == np.float32 for i in sensor_weights), "'sensor_weights' must be a list of numpy arrays of type float"
             
             assert isinstance(sensor_local_ind, list) and len(sensor_local_ind), "'sensor_local_ind' must be a list of the same length as the number of elements"
             assert all(isinstance(i, np.ndarray) for i in sensor_local_ind), "'sensor_local_ind' must be a list of numpy arrays"
