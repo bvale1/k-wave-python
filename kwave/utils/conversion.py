@@ -453,7 +453,7 @@ def tol_star(tolerance, kgrid, point, debug):
     elif kgrid_dim == 3:
         lin_ind = kgrid.Nx * kgrid.Ny * (ks - 1) + kgrid.Nx * (js - 1) + is_
 
-    return lin_ind, is_ - 1, js - 1, ks - 1  # -1 for mapping from Matlab indexing to Python indexing
+    return lin_ind, np.array(is_) - 1, np.array(js) - 1, np.array(ks) - 1  # -1 for mapping from Matlab indexing to Python indexing
 
 
 def find_closest(array, value):

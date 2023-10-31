@@ -423,7 +423,7 @@ class kWaveArray(object):
 
         for ind in range(self.number_elements):
             grid_weights = self.get_off_grid_points(kgrid, ind, True)
-            mask |= grid_weights
+            mask = np.bitwise_or(np.squeeze(mask), grid_weights)
 
         return mask
 
@@ -581,16 +581,30 @@ class kWaveArray(object):
 
         return grid_weights
 
-    def get_distributed_source_signal(self, kgrid, source_signal):
+    def get_distributed_source_signal(self, kgrid, source_signal, mask=None, sensor_weights=None, sensor_local_ind=None):
         start_time = time.time()
 
+        logger.debug(f'source_signal: {source_signal.shape} {source_signal.dtype}')
+        
         self.check_for_elements()
 
-        mask = self.get_array_binary_mask(kgrid)
+        if mask is None:
+            mask = self.get_array_binary_mask(kgrid)
+        else:
+            assert isinstance(mask, np.ndarray) and mask.dtype == bool, "'sensor_mask' must be a boolean numpy array"
+            assert mask.shape == (kgrid.Nx, kgrid.Ny), "'sensor_mask' must be the same size as kgrid"
+            
+        logger.debug(f'mask: {mask.shape} {mask.dtype}')
+        #import matplotlib.pyplot as plt
+        #plt.imshow(mask)
+        #plt.savefig('mask.png')
         mask_ind = matlab_find(mask).squeeze(axis=-1)
+        logger.debug(f'mask_ind: {mask_ind.shape} {mask_ind.dtype}')
         num_source_points = np.sum(mask)
+        logger.debug(f'num_source_points: {num_source_points} {type(num_source_points)}')
 
         Nt = np.shape(source_signal)[1]
+        logger.debug(f'Nt: {Nt} {type(Nt)}')
 
         if self.single_precision:
             data_type = 'float32'
@@ -599,34 +613,63 @@ class kWaveArray(object):
             data_type = 'float64'
             sz_bytes = num_source_points * Nt * 8
 
-        sz_ind = 1
+        sz_ind = 0
         while sz_bytes > 1024:
             sz_bytes = sz_bytes / 1024
             sz_ind += 1
 
         prefixes = ['', 'K', 'M', 'G', 'T']
         sz_bytes = np.round(sz_bytes, 2)  # TODO: should round to significant to map matlab functionality
-        print(f'approximate size of source matrix: {str(sz_bytes)} {prefixes[sz_ind]} B ( {data_type} precision)')
+        logger.info(f'approximate size of source matrix: {str(sz_bytes)} {prefixes[sz_ind]} B ( {data_type} precision)')
 
         source_signal = source_signal.astype(data_type)
 
         distributed_source_signal = np.zeros((num_source_points, Nt), dtype=data_type)
+        logger.debug(f'distributed_source_signal: {distributed_source_signal.shape} {distributed_source_signal.dtype}')
 
-        for ind in range(self.number_elements):
-            source_weights = self.get_element_grid_weights(kgrid, ind)
+        if sensor_weights is None or sensor_local_ind is None:
+            sensor_weights = []
+            sensor_local_ind = []
+            for ind in range(self.number_elements):
+                logger.debug(f'element {ind + 1} of {self.number_elements}')
+                
+                source_weights = self.get_element_grid_weights(kgrid, ind)
+                logger.debug(f'source_weights: {source_weights.shape} {source_weights.dtype}')
 
-            element_mask_ind = matlab_find(np.array(source_weights), val=0, mode='neq').squeeze(axis=-1)
+                element_mask_ind = matlab_find(np.array(source_weights), val=0, mode='neq').squeeze(axis=-1)
+                logger.debug(f'element_mask_ind: {element_mask_ind.shape} {element_mask_ind.dtype}')
 
-            local_ind = np.isin(mask_ind, element_mask_ind)
+                sensor_local_ind.append(np.isin(mask_ind, element_mask_ind))
+                logger.debug(f'local_ind: {sensor_local_ind[-1].shape} {sensor_local_ind[-1].dtype}')
+                
+                sensor_weights.append(matlab_mask(source_weights, element_mask_ind - 1))
+                logger.debug(f'sensor_weights[{ind}]: {sensor_weights[-1].shape} {sensor_weights[-1].dtype}')
 
-            distributed_source_signal[local_ind] += (
-                    matlab_mask(source_weights, element_mask_ind - 1) * source_signal[ind, :][None, :]
-            )
+                distributed_source_signal[sensor_local_ind[-1]] += (
+                        sensor_weights[-1] * source_signal[ind, :][None, :]
+                )
+                logger.debug(f'distributed_source_signal: {distributed_source_signal.shape} {distributed_source_signal.dtype}')
+        else:
+            assert isinstance(sensor_weights, list) and len(sensor_weights), "'sensor_weights' must be a list of the same length as the number of elements"
+            assert all(isinstance(i, np.ndarray) for i in sensor_weights), "'sensor_weights' must be a list of numpy arrays"
+            assert all(i.dtype == np.float32 for i in sensor_weights), "'sensor_weights' must be a list of numpy arrays of type float"
+            
+            assert isinstance(sensor_local_ind, list) and len(sensor_local_ind), "'sensor_local_ind' must be a list of the same length as the number of elements"
+            assert all(isinstance(i, np.ndarray) for i in sensor_local_ind), "'sensor_local_ind' must be a list of numpy arrays"
+            assert all(i.dtype == bool for i in sensor_local_ind), "'sensor_local_ind' must be a list of numpy arrays of type bool"
+            
+            for ind in range(self.number_elements):
+                distributed_source_signal[sensor_local_ind[ind]] += (
+                        sensor_weights[ind] * source_signal[ind, :][None, :]
+                )
+                logger.debug(f'distributed_source_signal: {distributed_source_signal.shape} {distributed_source_signal.dtype}')
+                logger.debug(f'sensor_local_ind[{ind}]: {sensor_local_ind[ind].shape} {sensor_local_ind[ind].dtype}')
+                logger.debug(f'sensor_weights[{ind}]: {sensor_weights[ind].shape} {sensor_weights[ind].dtype}')
 
         end_time = time.time()
-        print(f'total computation time : {end_time - start_time:.2f} s')
+        logger.info(f'total computation time : {end_time - start_time:.2f} s')
 
-        return distributed_source_signal
+        return (distributed_source_signal, sensor_weights, sensor_local_ind)
 
     def combine_sensor_data(self, kgrid, sensor_data, mask=None, sensor_weights=None, sensor_local_ind=None):
         self.check_for_elements()
@@ -645,7 +688,7 @@ class kWaveArray(object):
         combined_sensor_data = np.zeros((self.number_elements, Nt), dtype=np.float32)
         logger.debug(f'combined_sensor_data: {combined_sensor_data.shape} {combined_sensor_data.dtype}')
             
-        if sensor_weights is None:
+        if sensor_weights is None or sensor_local_ind is None:
             sensor_weights = []
             sensor_local_ind = []
         
@@ -864,13 +907,13 @@ def off_grid_points(kgrid, points,
         else:
             # create an array of neighbouring grid points for BLI evaluation
             if kgrid.dim == 1:
-                ind, is_ = tol_star(bli_tolerance, kgrid, point, debug)
-                xs = x_vec[is_]
+                ind, is_, _, _ = tol_star(bli_tolerance, kgrid, point, debug)
+                xs = x_vec[is_.astype(int)].squeeze(axis=-1)
                 xyz = xs
             elif kgrid.dim == 2:
-                ind, is_, js = tol_star(bli_tolerance, kgrid, point, debug)
-                xs = x_vec[is_]
-                ys = y_vec[js]
+                ind, is_, js, _ = tol_star(bli_tolerance, kgrid, point, debug)
+                xs = x_vec[is_.astype(int)].squeeze(axis=-1)
+                ys = y_vec[js.astype(int)].squeeze(axis=-1)
                 xyz = np.array([xs, ys]).T
             elif kgrid.dim == 3:
                 ind, is_, js, ks = tol_star(bli_tolerance, kgrid, point, debug)
@@ -880,13 +923,13 @@ def off_grid_points(kgrid, points,
                 xyz = np.array([xs, ys, zs]).T
 
             ind = ind.astype(int)
-
             if mask_only:
                 # add current points to the mask
                 mask = matlab_assign(mask, ind - 1, True)
             else:
                 # evaluate a BLI centered on point at grid nodes XYZ
                 if scalar_dxyz:
+                    
                     if single_precision:
                         mask_t = sinc(pi_on_dxyz * (xyz - point.T))
                     else:
