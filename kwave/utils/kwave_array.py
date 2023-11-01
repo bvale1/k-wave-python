@@ -592,7 +592,10 @@ class kWaveArray(object):
             mask = self.get_array_binary_mask(kgrid)
         else:
             assert isinstance(mask, np.ndarray) and mask.dtype == bool, "'sensor_mask' must be a boolean numpy array"
-            assert mask.shape == (kgrid.Nx, kgrid.Ny), "'sensor_mask' must be the same size as kgrid"
+            if kgrid.dim == 3:
+                assert mask.shape == (kgrid.Nx, kgrid.Ny, kgrid.Nz), "'sensor_mask' must be the same size as kgrid"
+            elif kgrid.dim == 2:
+                assert mask.shape == (kgrid.Nx, kgrid.Ny), "'sensor_mask' must be the same size as kgrid"
             
         logger.debug(f'mask: {mask.shape} {mask.dtype}')
         #import matplotlib.pyplot as plt
@@ -678,7 +681,10 @@ class kWaveArray(object):
             mask = self.get_array_binary_mask(kgrid)
         else:
             assert isinstance(mask, np.ndarray) and mask.dtype == bool, "'sensor_mask' must be a boolean numpy array"
-            assert mask.shape == np.squeeze(np.array([kgrid.Nx, kgrid.Ny, kgrid.Nz])).shape, "'sensor_mask' must be the same size as kgrid"
+            if kgrid.dim == 3:
+                assert mask.shape == (kgrid.Nx, kgrid.Ny, kgrid.Nz), "'sensor_mask' must be the same size as kgrid"
+            elif kgrid.dim == 2:
+                assert mask.shape == (kgrid.Nx, kgrid.Ny), "'sensor_mask' must be the same size as kgrid"
         
         logger.debug(f'sensor_data: {sensor_data.shape} {sensor_data.dtype}')
         
