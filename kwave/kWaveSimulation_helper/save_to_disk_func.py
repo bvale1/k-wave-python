@@ -1,5 +1,5 @@
 import os
-
+import logging
 import numpy as np
 from scipy.io import savemat
 
@@ -12,14 +12,15 @@ from kwave.utils.io import write_attributes, write_matrix
 from kwave.utils.matrix import num_dim2
 from kwave.utils.tictoc import TicToc
 
+logger = logging.getLogger(__name__)
 
 def save_to_disk_func(
         kgrid: kWaveGrid, medium: kWaveMedium, source,
         opt: SimulationOptions, values: dotdict, flags: dotdict):
     # update command line status
-    print('  precomputation completed in ', scale_time(TicToc.toc()))
+    logger.info('  precomputation completed in ', scale_time(TicToc.toc()))
     TicToc.tic()
-    print('  saving input files to disk...')
+    logger.info('  saving input files to disk...')
 
     # check for a binary sensor mask or cuboid corners
     # modified by Farid | disabled temporarily!
@@ -36,7 +37,6 @@ def save_to_disk_func(
     grab_integer_variables(integer_variables, kgrid, flags, medium)
     grab_pml_size(integer_variables, opt)
     grab_float_variables(float_variables, kgrid, opt, values, flags.elastic_code, flags.axisymmetric)
-
     # overwrite z-values for 2D simulations
     if kgrid.dim == 2:
         integer_variables.Nz = 1
@@ -46,19 +46,17 @@ def save_to_disk_func(
     grab_source_props(integer_variables, float_variables, source,
                       values.u_source_pos_index, values.s_source_pos_index, values.p_source_pos_index,
                       values.transducer_input_signal, values.delay_mask)
-
     grab_sensor_props(integer_variables, kgrid.dim, values.sensor_mask_index, values.record.cuboid_corners_list)
     grab_nonuniform_grid_props(float_variables, kgrid, flags.nonuniform_grid)
-
+    
     # =========================================================================
     # DATACAST AND SAVING
     # =========================================================================
 
     remove_z_dimension(float_variables, kgrid.dim)
     save_file(opt.input_filename, integer_variables, float_variables, opt.hdf_compression_level)
-
     # update command line status
-    print('  completed in ', scale_time(TicToc.toc()))
+    logger.info('  completed in ', scale_time(TicToc.toc()))
 
 
 def grab_integer_variables(integer_variables, kgrid, flags, medium):
