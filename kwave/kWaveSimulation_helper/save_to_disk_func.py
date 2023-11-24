@@ -1,5 +1,4 @@
 import os
-import logging
 import numpy as np
 from scipy.io import savemat
 
@@ -12,15 +11,11 @@ from kwave.utils.io import write_attributes, write_matrix
 from kwave.utils.matrix import num_dim2
 from kwave.utils.tictoc import TicToc
 
-logger = logging.getLogger(__name__)
-
 def save_to_disk_func(
         kgrid: kWaveGrid, medium: kWaveMedium, source,
         opt: SimulationOptions, values: dotdict, flags: dotdict):
     # update command line status
-    logger.info('  precomputation completed in ', scale_time(TicToc.toc()))
     TicToc.tic()
-    logger.info('  saving input files to disk...')
 
     # check for a binary sensor mask or cuboid corners
     # modified by Farid | disabled temporarily!
@@ -56,7 +51,6 @@ def save_to_disk_func(
     remove_z_dimension(float_variables, kgrid.dim)
     save_file(opt.input_filename, integer_variables, float_variables, opt.hdf_compression_level)
     # update command line status
-    logger.info('  completed in ', scale_time(TicToc.toc()))
 
 
 def grab_integer_variables(integer_variables, kgrid, flags, medium):

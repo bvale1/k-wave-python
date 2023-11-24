@@ -8,14 +8,11 @@ from typing import Optional
 import cv2
 import h5py
 import numpy as np
-import logging
 
 from .conversion import cast_to_type
 from .data import get_date_string
 from .dotdictionary import dotdict
 import kwave
-
-logger = logging.getLogger(__name__)
 
 def get_h5_literals():
     literals = dotdict({
@@ -57,23 +54,17 @@ def get_h5_literals():
 def write_matrix(filename, matrix: np.ndarray, matrix_name, compression_level=None):
     # get literals
     h5_literals = get_h5_literals()
-    logger.debug(f'Writing {matrix_name} to {filename}')
 
     if compression_level is None:
         compression_level = h5_literals.HDF_COMPRESSION_LEVEL
-    logger.debug(f'Compression level: {compression_level}')
 
     # dims = num_dim(matrix)
     dims = len(matrix.shape)
-    logger.debug(f'Dimensions: {dims}')
-    logger.debug(f'matrix: {matrix.shape} {matrix.dtype}')
 
     if dims == 3:
         matrix = np.transpose(matrix, [2, 1, 0])  # C <=> Fortran ordering
-        logger.debug(f'matrix transposed: {matrix.shape} {matrix.dtype}')
     if dims == 2:
         matrix = np.transpose(matrix)  # C <=> Fortran ordering
-        logger.debug(f'matrix transposed: {matrix.shape} {matrix.dtype}')
 
     # get the size of the input matrix
     if dims == 3:
@@ -84,8 +75,6 @@ def write_matrix(filename, matrix: np.ndarray, matrix_name, compression_level=No
     else:
         Nx, Ny, Nz = 1, 1, 1
         
-    logger.debug(f'Nx: {Nx}, Ny: {Ny}, Nz: {Nz}')
-
     # check size of matrix and set chunk size and compression level
     if dims == 3:
         # set chunk size to Nx * Ny
@@ -121,7 +110,6 @@ def write_matrix(filename, matrix: np.ndarray, matrix_name, compression_level=No
     else:
         # throw error for unknown matrix size
         raise ValueError('Input matrix must have 1, 2 or 3 dimensions.')
-    logger.debug(f'Chunk size: {chunk_size}')
 
     # check the format of the matrix is either single precision (float in C++)
     # or uint64 (unsigned long in C++)

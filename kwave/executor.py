@@ -42,6 +42,18 @@ class Executor:
                 logging.info('Skipping AssertionError in testing.')
 
         sensor_data = self.parse_executable_output(output_filename)
+        
+        logging.info(f'deleting temporary files {input_filename} and {output_filename}')
+        try:
+            os.remove(input_filename)
+        except Exception as e:
+            logging.info(f'Failed to delete {input_filename}')
+            logging.info(e)
+        try:
+            os.remove(output_filename)
+        except Exception as e:
+            logging.info(f'Failed to delete {output_filename}')
+            logging.info(e)
 
         return sensor_data
 
